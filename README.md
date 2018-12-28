@@ -10,7 +10,19 @@ You can install pgq with `go get`:
 
     go get github.com/btubbs/pgq
 
-## Defining Job Handlers
+## Usage
+
+There are a few steps to using pgq:
+
+1. Define job handler functions.
+2. Instantiate a new JobRunner.
+3. Register your handler functions with the JobRunner.
+4. Start the JobRunner.
+5. In another process, enqueue jobs with a JobRunner.
+
+Each of these steps will be explained in more detail below.
+
+### Defining Job Handlers
 
 While pgq will take care of pulling jobs off the queue, it's up to you to tell it exactly what each
 job does.  This is done by defining and registering handler functions.  A job handler func takes one
@@ -74,7 +86,7 @@ func buildGoodbyeHandler(db *sql.DB) func([]byte) error {
 (That example, like several below omits some error handling code.  Don't do that in real life.  It's
 only done here so you can see details about using pgq without getting lost in error handling noise.)
 
-## Processing Jobs with the JobRunner 
+### Processing Jobs with the JobRunner 
 
 Once you've defined a handler function, you need to register it with an instance of `pgq.JobRunner`.
 You can get one of those by passing your Postgres `*sql.DB` instance into `pgq.NewJobRunner`.
@@ -118,7 +130,7 @@ handlers.  If there's a job in the queue with an unregistered queue name, it wil
 can use this feature to start separate processes for handling different job types.  This is useful
 if some queues need to be scaled up to more worker processes than others.
 
-## Putting Jobs on the Queue
+### Putting Jobs on the Queue
 
 To enqueue jobs you need to have a JobRunner instance and then call its `EnqueueJob` method, which
 takes a queue name, a `[]byte` payload, and some optional arguments we'll cover later.  `EnqueueJob`
@@ -157,17 +169,17 @@ if thereWasAnErrorSomewhereElse {
 
 ```
 
-## Additional Options
+### Additional Options
 
 There are some additional things you can configure, both at the per-runner level and the per-job
 level.
 
-### Runner Options
+#### Runner Options
 
 These options are passed as additional arguments when calling `pgq.NewJobRunner`, using the [functional
 options](https://dave.cheney.net/2014/10/17/functional-options-for-friendly-apis) pattern.
 
-#### JobPollingInterval
+##### JobPollingInterval
 
 After a runner completes a job, it immediately queries for another one.  If there are no jobs
 waiting in a queue, it will sleep for a few seconds before querying again.  By default that's 10
@@ -181,7 +193,7 @@ runner, err := pgq.NewJobRunner(
 )
 ```
 
-#### PreserveCompletedJobs
+##### PreserveCompletedJobs
 
 By default, jobs are deleted from the `pgq_jobs` table after being performed.  If you would prefer
 to leave them in the table for analytics or debugging purposes, you can pass the
@@ -194,9 +206,9 @@ runner, err := pgq.NewJobRunner(
 )
 ```
 
-### Job Options
+#### Job Options
 
-#### After
+##### After
 
 If you want a job to be processed at some time in the future instead of immediately, you can pass
 the `pgq.After` option to the runner's `EnqueueJob` method.  This option takes a `time.Time`.  This
@@ -210,7 +222,7 @@ jobID, err := runner.EnqueueJob(
 )
 ```
 
-#### RetryWaits
+##### RetryWaits
 
 Sometimes jobs fail through no fault of their own.  It could be because of downtime in a database,
 or a third party API, or a flaky network.  It can be useful to retry jobs automatically when such
