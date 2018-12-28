@@ -1,0 +1,16 @@
+language: go
+cache:
+  directories:
+    - ${GOPATH}/src/github.com/${TRAVIS_REPO_SLUG}/vendor
+    - ${GOPATH}/src/github.com/golang
+go:
+  - "1.11"
+sudo: false
+
+services:
+  - postgresql
+addons:
+  postgresql: "9.6"    
+
+script:
+  - make ci
