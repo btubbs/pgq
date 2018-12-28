@@ -27,8 +27,8 @@ func TestEnqueueJob(t *testing.T) {
 				assert.Equal(t, []byte("some data"), job.Data)
 				assert.Equal(t, Durations{
 					time.Minute,
-					time.Minute,
-					time.Minute,
+					time.Minute * 10,
+					time.Minute * 30,
 				}, job.RetryWaits)
 			},
 		},

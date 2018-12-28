@@ -176,8 +176,8 @@ func TestPerformNextJob(t *testing.T) {
 				assert.Nil(t, db.Select(&jobs, `SELECT * FROM pgq_jobs`))
 				assert.Equal(t, 1, len(jobs))
 				assert.Equal(t, Durations{
-					time.Minute,
-					time.Minute,
+					time.Minute * 10,
+					time.Minute * 30,
 				}, jobs[0].RetryWaits)
 			},
 		},

@@ -55,8 +55,8 @@ func enqueueJob(execer DB, queueName string, data []byte, options ...JobOption) 
 		// by default, we'll do 3 attempts with 60 seconds between each.
 		RetryWaits: []time.Duration{
 			time.Second * 60,
-			time.Second * 60,
-			time.Second * 60,
+			time.Second * 60 * 10,
+			time.Second * 60 * 30,
 		},
 	}
 	// Apply any job customzations provided by the user
