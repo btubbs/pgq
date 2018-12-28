@@ -45,7 +45,6 @@ func withFreshDB(testFunc func(*sqlx.DB)) {
 	masterDB := getMasterDB()
 	defer masterDB.Close()
 	dbName := "pgq_test_" + randString(12)
-	fmt.Println("dbName", dbName)
 	_, err := masterDB.Exec("CREATE DATABASE " + dbName)
 	if err != nil {
 		panic(err)

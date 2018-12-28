@@ -128,7 +128,6 @@ func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
 		}()
 		jobErr = jobFunc(job.Data)
 	}()
-	fmt.Println("jobErr", jobErr)
 
 	// either delete the job from the queue, or update it with output, depending on how we've been configured.
 	if jr.deleteJobOnComplete {
@@ -137,17 +136,14 @@ func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
 			return true, errorx.DecorateMany("attempting to commit", jobErr, err, tx.Commit())
 		}
 	} else {
-		fmt.Println("not deleting")
 		// store the ranAt time and any error returned
 		err = updateJob(tx, job, ranAt, jobErr)
 		if err != nil {
-			fmt.Println("updateErr", err)
 			return true, errorx.DecorateMany("attempting to commit", jobErr, err, tx.Commit())
 		}
 	}
 
 	if jobErr != nil {
-		fmt.Println("retries?", job.RetryWaits)
 		if len(job.RetryWaits) > 0 {
 			// we errored, but we have more attempts.  Enqueue the next one for the future, after waiting the first attempt
 			// duration.  Store the rest of the attempt Durations on the new Job.
@@ -164,7 +160,6 @@ func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
 		}
 		return true, errorx.DecorateMany("job errored", jobErr, tx.Commit())
 	}
-	fmt.Println("almost done")
 	return true, errorx.DecorateMany("could not commit transaction", jobErr, tx.Commit())
 }
 
