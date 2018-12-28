@@ -1,4 +1,4 @@
-# pgq
+# pgq [![Build Status](https://travis-ci.org/btubbs/pgq.svg?branch=master)](https://travis-ci.org/btubbs/pgq) [![Coverage Status](https://coveralls.io/repos/github/btubbs/pgq/badge.svg?branch=master)](https://coveralls.io/github/btubbs/pgq?branch=master)
 
 TODO
 - add runner option to preserve old jobs.
