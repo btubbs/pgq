@@ -1,0 +1,10 @@
+run:
+  tests: false
+linters:
+  enable: golint,staticcheck,gosimple,unused
+  disable: dupl,maligned,megacheck
+issues:
+  exclude:
+    - "runTestCases.*unused"
+    - "svc.BatchAccountImport.*not checked"
+    - "ALL_CAPS"

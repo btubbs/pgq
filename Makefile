@@ -16,11 +16,8 @@ coverage.txt: dep $(GOBIN)/go-acc
 viewcoverage: coverage.txt 
 	go tool cover -html=$<
 
-vet:
-	go vet ./...
-
 check: $(GOBIN)/golangci-lint
-	$(GOBIN)/golangci-lint run
+	$(GOBIN)/golangci-lint run --skip-dirs=example
 
 $(GOBIN)/goveralls:
 	go get -v -u github.com/mattn/goveralls
@@ -34,5 +31,5 @@ $(GOBIN)/golangci-lint:
 $(GOBIN)/go-acc:
 	go get github.com/ory/go-acc
 
-ci: coverage.txt vet check $(GOBIN)/goveralls
+ci: coverage.txt check $(GOBIN)/goveralls
 	$(GOBIN)/goveralls -coverprofile=$< -service=travis-ci
