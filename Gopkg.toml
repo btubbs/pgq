@@ -24,6 +24,7 @@
 #   go-tests = true
 #   unused-packages = true
 
+required = ["github.com/ory/go-acc"]
 
 [[constraint]]
   name = "github.com/guregu/null"
