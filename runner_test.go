@@ -73,7 +73,7 @@ func TestPerformNextJob(t *testing.T) {
 			handler: nil,
 			makeAssertions: func(t *testing.T, db *sqlx.DB, attempted bool, jobErr error) {
 				assert.False(t, attempted)
-				assert.Equal(t, "cannot run job, cause: no job handler registered for 'blah' queue", jobErr.Error())
+				assert.Equal(t, "error performing job, cause: cannot run job, cause: no job handler registered for 'blah' queue", jobErr.Error())
 				var count int
 				assert.Nil(t, db.Get(&count, `SELECT count(*) from pgq_jobs;`))
 				assert.Equal(t, 1, count)
@@ -89,8 +89,7 @@ func TestPerformNextJob(t *testing.T) {
 			},
 			makeAssertions: func(t *testing.T, db *sqlx.DB, attempted bool, jobErr error) {
 				assert.True(t, attempted)
-				assert.NotNil(t, jobErr)
-				assert.Equal(t, "job errored, cause: panic in job handler, cause: boom", jobErr.Error())
+				assert.Nil(t, jobErr)
 				var count int
 				assert.Nil(t, db.Get(&count, `SELECT count(*) from pgq_jobs;`))
 				assert.Equal(t, 1, count) // the retry
@@ -106,8 +105,7 @@ func TestPerformNextJob(t *testing.T) {
 			},
 			makeAssertions: func(t *testing.T, db *sqlx.DB, attempted bool, jobErr error) {
 				assert.True(t, attempted)
-				assert.NotNil(t, jobErr)
-				assert.Equal(t, "job errored, cause: boom", jobErr.Error())
+				assert.Nil(t, jobErr)
 				var count int
 				assert.Nil(t, db.Get(&count, `SELECT count(*) from pgq_jobs;`))
 				assert.Equal(t, 1, count)
@@ -150,7 +148,7 @@ func TestPerformNextJob(t *testing.T) {
 			},
 			makeAssertions: func(t *testing.T, db *sqlx.DB, attempted bool, jobErr error) {
 				assert.True(t, attempted)
-				assert.NotNil(t, jobErr)
+				assert.Nil(t, jobErr)
 
 				jobs := []Job{}
 				assert.Nil(t, db.Select(&jobs, `SELECT * FROM pgq_jobs ORDER BY created_at`))
