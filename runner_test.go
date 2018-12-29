@@ -2,6 +2,7 @@ package pgq
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,4 +200,103 @@ func TestPerformNextJob(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestRunABunchOfTasks(t *testing.T) {
+	withFreshDB(func(db *sqlx.DB) {
+
+		jobMultiplier := 100
+		retries := []time.Duration{0}
+		expectedJobs := (jobMultiplier + // "good" attempts
+			jobMultiplier*(len(retries)+1) + // "bad" attempts
+			jobMultiplier*(len(retries)+1)) // "ugly" attempts
+		var jobWG sync.WaitGroup
+		jobWG.Add(expectedJobs)
+
+		// we also say "done" when a runner exits
+		runnerCount := 1
+		var runnerWG sync.WaitGroup
+		runnerWG.Add(runnerCount)
+
+		// three tasks.  one always succeeds, one always fails, one always panics
+		good := func(data []byte) error {
+			jobWG.Done()
+			return nil
+		}
+		bad := func(data []byte) error {
+			jobWG.Done()
+			return errors.New("this is an error")
+		}
+		ugly := func(data []byte) error {
+			jobWG.Done()
+			panic("this is a panic!")
+		}
+
+		var runners []*JobRunner
+		// start up 10 runners.  persist job history
+		for n := 0; n < runnerCount; n++ {
+			jr := NewJobRunner(
+				db.DB,
+				OnStop(func() {
+					runnerWG.Done()
+				}),
+				PreserveCompletedJobs,
+				JobPollingInterval(0),
+			)
+			jr.RegisterQueue("good", good)
+			jr.RegisterQueue("bad", bad)
+			jr.RegisterQueue("ugly", ugly)
+			go jr.Run()
+			runners = append(runners, jr)
+		}
+		for n := 0; n < jobMultiplier; n++ {
+			_, err := runners[0].EnqueueJob(
+				"good",
+				[]byte(""),
+				RetryWaits(retries),
+			)
+			assert.Nil(t, err)
+			runners[0].EnqueueJob(
+				"bad",
+				[]byte(""),
+				RetryWaits(retries),
+			)
+			assert.Nil(t, err)
+			runners[0].EnqueueJob(
+				"ugly",
+				[]byte(""),
+				RetryWaits([]time.Duration{0}),
+			)
+			assert.Nil(t, err)
+		}
+
+		jobWG.Wait()
+
+		// tell all the runners to stop
+		for _, runner := range runners {
+			runner.StopChan <- true
+		}
+		runnerWG.Wait()
+
+		var jobCount int
+		// total attempts
+		err := db.QueryRow(`SELECT count(*) FROM pgq_jobs`).Scan(&jobCount)
+		assert.Nil(t, err)
+		assert.Equal(t, expectedJobs, jobCount)
+
+		// good
+		err = db.QueryRow(`SELECT count(*) FROM pgq_jobs WHERE queue_name='good'`).Scan(&jobCount)
+		assert.Nil(t, err)
+		assert.Equal(t, jobMultiplier, jobCount)
+
+		// bad
+		err = db.QueryRow(`SELECT count(*) FROM pgq_jobs WHERE queue_name='bad'`).Scan(&jobCount)
+		assert.Nil(t, err)
+		assert.Equal(t, jobMultiplier*(len(retries)+1), jobCount)
+
+		// ugly
+		err = db.QueryRow(`SELECT count(*) FROM pgq_jobs WHERE queue_name='ugly'`).Scan(&jobCount)
+		assert.Nil(t, err)
+		assert.Equal(t, jobMultiplier*(len(retries)+1), jobCount)
+	})
 }

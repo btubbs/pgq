@@ -20,6 +20,8 @@ type JobRunner struct {
 	queueNames          []string
 	jobPollingInterval  time.Duration
 	deleteJobOnComplete bool
+	StopChan            chan bool
+	onStop              func()
 }
 
 // NewJobRunner takes a Postgres DB connection and returns a JobRunner instance.
@@ -29,6 +31,7 @@ func NewJobRunner(db *sql.DB, options ...RunnerOption) *JobRunner {
 		handlers:            map[string]func([]byte) error{},
 		jobPollingInterval:  time.Second * 10,
 		deleteJobOnComplete: true,
+		StopChan:            make(chan bool),
 	}
 	for _, option := range options {
 		option(runner)
@@ -62,42 +65,41 @@ func (jr *JobRunner) RegisterQueue(queueName string, jobFunc func([]byte) error)
 
 // Run will query for the next job in the queue, then run it, then do another, forever.
 func (jr *JobRunner) Run() error {
+	if jr.onStop != nil {
+		defer jr.onStop()
+	}
 	for {
-		if foundJob, err := jr.PerformNextJob(); err != nil {
-			return errorx.Decorate(err, "exiting job runner")
-		} else if !foundJob {
-			// we didn't find a job.  Take a nap.
-			time.Sleep(jr.jobPollingInterval)
+		select {
+		case <-jr.StopChan:
+			return nil
+		default:
+			if foundJob, err := jr.PerformNextJob(); err != nil {
+				fmt.Println("err", err)
+				return errorx.Decorate(err, "exiting job runner")
+			} else if !foundJob {
+				// we didn't find a job.  Take a nap.
+				time.Sleep(jr.jobPollingInterval)
+			}
 		}
 	}
 }
 
-func errWithRollback(tx *sqlx.Tx, err error) error {
-	if rollbackErr := tx.Rollback(); rollbackErr != nil {
-		return errorx.DecorateMany("could not roll back transaction", err, rollbackErr)
-	}
-	return err
-}
-
 // PerformNextJob performs the next job in the queue. It returns true if it attempted to run a job, or false
-// if there was no job in the queue or some error prevented it from attempting to run the job.
-func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
+// if there was no job in the queue or some error prevented it from attempting to run the job.  It only returns an
+// error if there's some problem talking to Postgres.  Errors inside jobs are not bubbled up.
+func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 	tx, err := jr.db.Beginx()
 	if err != nil {
 		return false, err
 	}
-
 	defer func() {
-		if r := recover(); r != nil {
-			outErr = fmt.Errorf("%v", r)
-			outErr = errorx.Decorate(outErr, "rolling back transaction")
-			outErr = errWithRollback(tx, outErr)
-		}
+		outErr = errorx.DecorateMany("error performing job", outErr, tx.Commit())
 	}()
+
 	//   get job
 	job, err := getNextJob(tx, jr.queueNames)
 	if err != nil {
-		return false, errWithRollback(tx, err)
+		return false, err
 	}
 
 	// nothing to do.  Bail out here.
@@ -108,11 +110,9 @@ func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
 	// get handler func from internal map
 	jobFunc, ok := jr.handlers[job.QueueName]
 	if !ok {
-		rollbackErr := tx.Rollback()
 		return false, errorx.DecorateMany(
 			"cannot run job",
 			fmt.Errorf("no job handler registered for '%s' queue", job.QueueName),
-			rollbackErr,
 		)
 	}
 	ranAt := time.Now()
@@ -133,34 +133,31 @@ func (jr *JobRunner) PerformNextJob() (foundJob bool, outErr error) {
 	if jr.deleteJobOnComplete {
 		err = deleteJob(tx, job)
 		if err != nil {
-			return true, errorx.DecorateMany("attempting to commit", jobErr, err, tx.Commit())
+			return true, errorx.Decorate(err, "could not delete job")
 		}
 	} else {
 		// store the ranAt time and any error returned
 		err = updateJob(tx, job, ranAt, jobErr)
 		if err != nil {
-			return true, errorx.DecorateMany("attempting to commit", jobErr, err, tx.Commit())
+			return true, errorx.Decorate(err, "could not update job")
 		}
 	}
 
-	if jobErr != nil {
-		if len(job.RetryWaits) > 0 {
-			// we errored, but we have more attempts.  Enqueue the next one for the future, after waiting the first attempt
-			// duration.  Store the rest of the attempt Durations on the new Job.
-			_, err = enqueueJob(
-				tx,
-				job.QueueName,
-				job.Data,
-				After(time.Now().Add(job.RetryWaits[0])),
-				RetryWaits(job.RetryWaits[1:]),
-			)
-			if err != nil {
-				return true, errorx.DecorateMany("error enqueueing retry", jobErr, err, tx.Commit())
-			}
+	if jobErr != nil && len(job.RetryWaits) > 0 {
+		// we errored, but we have more attempts.  Enqueue the next one for the future, after waiting the first attempt
+		// duration.  Store the rest of the attempt Durations on the new Job.
+		_, err = enqueueJob(
+			tx,
+			job.QueueName,
+			job.Data,
+			After(time.Now().Add(job.RetryWaits[0])),
+			RetryWaits(job.RetryWaits[1:]),
+		)
+		if err != nil {
+			return true, errorx.Decorate(err, "error enqueueing retry")
 		}
-		return true, errorx.DecorateMany("job errored", jobErr, tx.Commit())
 	}
-	return true, errorx.DecorateMany("could not commit transaction", jobErr, tx.Commit())
+	return true, nil
 }
 
 // A RunnerOption sets an optional parameter on the JobRunner.
@@ -178,4 +175,11 @@ func JobPollingInterval(d time.Duration) RunnerOption {
 // when complete.
 func PreserveCompletedJobs(jr *JobRunner) {
 	jr.deleteJobOnComplete = false
+}
+
+// OnStop sets an optional callback function that will be called when the runner exits its Run method.
+func OnStop(f func()) RunnerOption {
+	return func(jr *JobRunner) {
+		jr.onStop = f
+	}
 }

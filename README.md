@@ -4,11 +4,16 @@ pgq is a Go library for job queues that use Postgres for persistence.  It builds
 LOCKED](https://blog.2ndquadrant.com/what-is-select-skip-locked-for-in-postgresql-9-5/)
 functionality added in Postgres 9.5, which makes its queries very simple and readable.
 
-## Installation
+## Installation and Setup
 
 You can install pgq with `go get`:
 
     go get github.com/btubbs/pgq
+
+Before you can enqueue or process jobs with pgq, your Postgres database will need the table and
+index defined in `sql/create_table.sql`.  You can paste this right into `psql` command line while
+connected to your database, or paste it into the migration tool of your choice.  (I'm partial to
+[Pomegranate](https://github.com/btubbs/pomegranate).)
 
 ## Usage
 
