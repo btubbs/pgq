@@ -2,7 +2,8 @@
 
 pgq is a Go library for job queues that use Postgres for persistence.  It builds on the [SKIP
 LOCKED](https://blog.2ndquadrant.com/what-is-select-skip-locked-for-in-postgresql-9-5/)
-functionality added in Postgres 9.5, which makes its queries very simple and readable.
+functionality added in Postgres 9.5, which provides safe locking of in-progress jobs while keeping 
+ queries very simple and readable.
 
 ## Installation and Setup
 
