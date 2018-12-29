@@ -124,11 +124,18 @@ error.
 
 Once your handler functions have been registered, you start the job runner by calling its `Run`
 method.  This call will query for uncompleted jobs and call the appropriate handler function for each
-of them.  This will loop and perform jobs forever, unless it encounters an unrecoverable error or is
-forcibly killed.
+of them.  
 
 ```go
 err := runner.Run()
+```
+
+This will loop and perform jobs forever.  It will only stop it hits an unrecoverable error, or the
+program is terminated, or your program stops the loop by sending a value on the runner's stop
+channel, like this:
+
+```go
+runner.StopChan <- true
 ```
 
 The runner will only query for jobs that have a queue name that matches one of its registered
