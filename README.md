@@ -21,10 +21,10 @@ connected to your database, or paste it into the migration tool of your choice. 
 There are a few steps to using pgq:
 
 1. Define job handler functions.
-2. Instantiate a new JobRunner.
-3. Register your handler functions with the JobRunner.
-4. Start the JobRunner.
-5. In another process, enqueue jobs with a JobRunner.
+2. Instantiate a new Worker.
+3. Register your handler functions with the Worker.
+4. Start the Worker.
+5. In another process, enqueue jobs with a Worker.
 
 Each of these steps will be explained in more detail below.
 
@@ -50,14 +50,14 @@ access to some resources, like config or a database.  In that case you can use e
 closures to inject those resources.  Here's an example of a struct method job handler:
 
 ```go
-type MyJobWorker struct {
+type MyApp struct {
   db *sql.DB
 }
 
-func (worker *MyJobWorker) SayGoodbye(data []byte) error {
+func (app *MyApp) SayGoodbye(data []byte) error {
   // this is a silly example of a DB query, but illustrates the point.
   var message string
-  err := worker.db.QueryRow(`SELECT 'Goodbye ' || $1`, string(data)).Scan(&message)
+  err := app.db.QueryRow(`SELECT 'Goodbye ' || $1`, string(data)).Scan(&message)
   if err != nil {
     return err
   }
@@ -92,78 +92,78 @@ func buildGoodbyeHandler(db *sql.DB) func([]byte) error {
 (That example, like several below omits some error handling code.  Don't do that in real life.  It's
 only done here so you can see details about using pgq without getting lost in error handling noise.)
 
-### Processing Jobs with the JobRunner 
+### Processing Jobs with the Worker 
 
-Once you've defined a handler function, you need to register it with an instance of `pgq.JobRunner`.
-You can get one of those by passing your Postgres `*sql.DB` instance into `pgq.NewJobRunner`.
+Once you've defined a handler function, you need to register it with an instance of `pgq.Worker`.
+You can get one of those by passing your Postgres `*sql.DB` instance into `pgq.NewWorker`.
 
 ```go
 db, _ := sql.Open("postgres", "postgres://postgres@/my_database?sslmode=disable")
-runner := pgq.NewJobRunner(db)
+worker := pgq.NewWorker(db)
 ```
 
-Now you can register your job handler functions with this runner by calling its `RegisterQueue`
+Now you can register your job handler functions with this worker by calling its `RegisterQueue`
 method and passing two arguments: the queue name (which can be any string you like), and your
 handler function.
 
 ```go
-err := runner.RegisterQueue("hello", SayHello)
+err := worker.RegisterQueue("hello", SayHello)
 ```
 
 If you're using struct methods as job handler functions, you need to instantiate your struct and
-then register its methods.  This example uses the `MyJobWorker` struct shown above.
+then register its methods.  This example uses the `MyApp` struct shown above.
 
 ```go
 db, _ := sql.Open("postgres", "postgres://postgres@/my_database?sslmode=disable")
-worker := &MyJobWorker{db: db}
-err := runner.RegisterQueue("goodbye", worker.SayGoodbye)
+myApp := &MyApp{db: db}
+err := worker.RegisterQueue("goodbye", myApp.SayGoodbye)
 ```
 
-If you attempt to register the same queue name more than once on the same runner, you'll get an
+If you attempt to register the same queue name more than once on the same worker, you'll get an
 error.
 
-With your handler functions now registered, you start the job runner by calling its `Run`
+With your handler functions now registered, you start the job worker by calling its `Run`
 method.  This call will query for uncompleted jobs and call the appropriate handler function for each
 of them.
 
 ```go
-err := runner.Run()
+err := worker.Run()
 ```
 
 This will loop and perform jobs forever.  It will only stop if it hits an unrecoverable error, or
-the program is terminated, or your program stops the loop by sending a value on the runner's stop
+the program is terminated, or your program stops the loop by sending a value on the worker's stop
 channel, like this:
 
 ```go
-runner.StopChan <- true
+worker.StopChan <- true
 ```
 
-The runner will only query for jobs that have a queue name that matches one of its registered
+The worker will only query for jobs that have a queue name that matches one of its registered
 handlers.  If there's a job in the queue with an unregistered queue name, it will be ignored.  You
 can use this feature to start separate processes for handling different job types.  This is useful
 if some queues need to be scaled up to more worker processes than others.
 
 ### Putting Jobs on the Queue
 
-To enqueue jobs you need to have a JobRunner instance and then call its `EnqueueJob` method, which
+To enqueue jobs you need to have a Worker instance and then call its `EnqueueJob` method, which
 takes a queue name, a `[]byte` payload, and some optional arguments we'll cover later.  `EnqueueJob`
 will return an integer job ID (only useful for logging/debugging), and possibly an error.
 
 ```go
 db, _ := sql.Open("postgres", "postgres://postgres@/my_database?sslmode=disable")
-runner := pgq.NewJobRunner(db)
-jobID, err := runner.EnqueueJob("hello", []byte("Brent"))
+worker := pgq.NewWorker(db)
+jobID, err := worker.EnqueueJob("hello", []byte("Brent"))
 ```
 
 If you're using the same Postgres database for both pgq and your own application tables, you might
 want to have the enqueueing of jobs happen in the same database transaction where you're doing other
-database calls.  In that case, you can use the runner's `EnqueueJobInTx` method, which lets you pass
+database calls.  In that case, you can use the worker's `EnqueueJobInTx` method, which lets you pass
 in your own transaction object.  It's up to you to ensure that the transaction is properly committed
 or rolled back. Example:
 
 ```go
 db, _ := sql.Open("postgres", "postgres://postgres@/my_database?sslmode=disable")
-runner := pgq.NewJobRunner(db)
+worker := pgq.NewWorker(db)
 
 // later on in some other part of your app...
 tx, _ := db.Begin()
@@ -172,7 +172,7 @@ tx, _ := db.Begin()
 // so both will succeed or fail together, and we avoid sending a welcome email to a user 
 // whose account never actually got created because the tx got rolled back.
 createUser(tx, someUserData)
-jobID, err := runner.EnqueueJobInTx(tx, "sendWelcomeEmail", someWelcomeEmailData)
+jobID, err := worker.EnqueueJobInTx(tx, "sendWelcomeEmail", someWelcomeEmailData)
 
 if thereWasAnErrorSomewhereElse {
   tx.Rollback()
@@ -182,25 +182,25 @@ if thereWasAnErrorSomewhereElse {
 
 ```
 
-### Additional Options
+### Additional Features 
 
-There are some additional things you can configure, both at the per-runner level and the per-job
+There are some additional things you can configure, both at the per-worker level and the per-job
 level.
 
 #### Runner Options
 
-These options are passed as additional arguments when calling `pgq.NewJobRunner`, using the [functional
+These options are passed as additional arguments when calling `pgq.NewWorker`, using the [functional
 options](https://dave.cheney.net/2014/10/17/functional-options-for-friendly-apis) pattern.
 
 ##### JobPollingInterval
 
-After a runner completes a job, it immediately queries for another one.  If there are no jobs
+After a worker completes a job, it immediately queries for another one.  If there are no jobs
 waiting in a queue, it will sleep for a few seconds before querying again.  By default that's 10
 seconds.  You can change that default by passing in the `JobPollingInterval` option with a
-time.Duration to `NewJobRunner`.  In this example we increase it to 30 seconds.
+time.Duration to `NewWorker`.  In this example we increase it to 30 seconds.
 
 ```go
-runner, err := pgq.NewJobRunner(
+worker, err := pgq.NewWorker(
   db,
   pgq.JobPollingInterval(time.Second * 30),
 )
@@ -210,10 +210,10 @@ runner, err := pgq.NewJobRunner(
 
 By default, jobs are deleted from the `pgq_jobs` table after being performed.  If you would prefer
 to leave them in the table for analytics or debugging purposes, you can pass the
-`PreserveCompletedJobs` option to `pgq.NewJobRunner`:
+`PreserveCompletedJobs` option to `pgq.NewWorker`:
 
 ```go
-runner, err := pgq.NewJobRunner(
+worker, err := pgq.NewWorker(
   db,
   pgq.PreserveCompletedJobs,
 )
@@ -224,11 +224,11 @@ runner, err := pgq.NewJobRunner(
 ##### After
 
 If you want a job to be processed at some time in the future instead of immediately, you can pass
-the `pgq.After` option to the runner's `EnqueueJob` method.  This option takes a `time.Time`.  This
+the `pgq.After` option to the worker's `EnqueueJob` method.  This option takes a `time.Time`.  This
 example sets a job to be run 24 hours in the future.
 
 ```go
-jobID, err := runner.EnqueueJob(
+jobID, err := worker.EnqueueJob(
   "sendWelcomeEmail",
   someWelcomeData,
   pgq.After(time.Now().Add(time.Minute * 60 * 24)),
@@ -249,12 +249,12 @@ long to wait before each.  If a job returns an error, and it's configured to all
 retries, then it will be run again.
 
 By default pgq does three retries, with one minute, ten minute, and 30 minute waits. You can
-override this by passing the `RetryWaits` option to the runner's `EnqueueJob` method.  This option
+override this by passing the `RetryWaits` option to the worker's `EnqueueJob` method.  This option
 takes in a slice of durations specifying how long each wait should be. In this example we set two
 retries, one after an hour and another after 6 hours:
 
 ```go
-jobID, err := runner.EnqueueJob(
+jobID, err := worker.EnqueueJob(
   "sendWelcomeEmail",
   someWelcomeData,
   pgq.RetryWaits([]time.Duration{
@@ -264,6 +264,22 @@ jobID, err := runner.EnqueueJob(
 )
 ```
 
-TODO
-- exponential backoff runner option.
-- logging, with configurable levels, as a runner option
+#### Exponential Backoffs
+
+While retries may help a single job be resilient to intermittent failures, they won't slow down a
+big queue of jobs that are all failing because some backend system is down.  For that you need to
+tell the worker to slow down its processing of jobs on the whole queue.  You can do that by having
+your job return an error that implements this interface:
+
+```go
+// Backoffer is a type of error that can also indicate whether a queue should slow down.
+type Backoffer interface {
+	error
+	Backoff() bool
+}
+```
+
+If the error returned by your job implements that interface, and tts `Backoff()` method returns
+`true`, then the worker will pause for a short time (100 milliseconds) before pulling jobs off that
+queue again.  The next time a job returns a backoff, that time will be doubled, and so on until
+reaching the max backoff time (60 seconds).
