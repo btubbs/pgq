@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewJobRunner(t *testing.T) {
+func TestNewWorker(t *testing.T) {
 	db := getTestDB()
 	defer db.Close()
-	runner := NewJobRunner(
+	runner := NewWorker(
 		db.DB,
 		JobPollingInterval(time.Nanosecond),
 		PreserveCompletedJobs,
@@ -25,15 +25,15 @@ func TestNewJobRunner(t *testing.T) {
 func TestPerformNextJob(t *testing.T) {
 	tt := []struct {
 		desc           string
-		runnerOptions  []RunnerOption
-		enqueueJobs    func(*JobRunner)
+		runnerOptions  []WorkerOption
+		enqueueJobs    func(*Worker)
 		handler        func([]byte) error
 		makeAssertions func(*testing.T, *sqlx.DB, bool, error)
 	}{
 		{
 			desc: "happy path",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
 			handler: func(b []byte) error {
 				return nil
@@ -48,7 +48,7 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "no job in queue",
-			enqueueJobs: func(jr *JobRunner) {
+			enqueueJobs: func(worker *Worker) {
 			},
 			handler: func(b []byte) error {
 				assert.Fail(t, "I should never be called.")
@@ -64,8 +64,8 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "jobFunc panics",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
 			handler: func(b []byte) error {
 				panic("boom")
@@ -80,8 +80,8 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "jobFunc errors",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
 			handler: func(b []byte) error {
 				return errors.New("boom")
@@ -96,10 +96,10 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "preserve attempts",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
-			runnerOptions: []RunnerOption{
+			runnerOptions: []WorkerOption{
 				PreserveCompletedJobs,
 			},
 			handler: func(b []byte) error {
@@ -120,10 +120,10 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "preserve errors with attempts",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
-			runnerOptions: []RunnerOption{
+			runnerOptions: []WorkerOption{
 				PreserveCompletedJobs,
 			},
 			handler: func(b []byte) error {
@@ -145,8 +145,8 @@ func TestPerformNextJob(t *testing.T) {
 		},
 		{
 			desc: "retries get enqueued",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
+			enqueueJobs: func(worker *Worker) {
+				worker.EnqueueJob("blah", []byte("some data"))
 			},
 			handler: func(b []byte) error {
 				return errors.New("boom")
@@ -167,7 +167,7 @@ func TestPerformNextJob(t *testing.T) {
 	for _, tc := range tt {
 		t.Run(tc.desc, func(t *testing.T) {
 			withFreshDB(func(db *sqlx.DB) {
-				runner := NewJobRunner(
+				runner := NewWorker(
 					db.DB,
 					tc.runnerOptions...,
 				)
@@ -213,10 +213,10 @@ func TestRunABunchOfTasks(t *testing.T) {
 			panic("this is a panic!")
 		}
 
-		var runners []*JobRunner
-		// start up 10 runners.  persist job history
+		var workers []*Worker
+		// start up 10 workers.  persist job history
 		for n := 0; n < runnerCount; n++ {
-			jr := NewJobRunner(
+			worker := NewWorker(
 				db.DB,
 				OnStop(func() {
 					runnerWG.Done()
@@ -224,26 +224,26 @@ func TestRunABunchOfTasks(t *testing.T) {
 				PreserveCompletedJobs,
 				JobPollingInterval(0),
 			)
-			jr.RegisterQueue("good", good)
-			jr.RegisterQueue("bad", bad)
-			jr.RegisterQueue("ugly", ugly)
-			go jr.Run()
-			runners = append(runners, jr)
+			worker.RegisterQueue("good", good)
+			worker.RegisterQueue("bad", bad)
+			worker.RegisterQueue("ugly", ugly)
+			go worker.Run()
+			workers = append(workers, worker)
 		}
 		for n := 0; n < jobMultiplier; n++ {
-			_, err := runners[0].EnqueueJob(
+			_, err := workers[0].EnqueueJob(
 				"good",
 				[]byte(""),
 				RetryWaits(retries),
 			)
 			assert.Nil(t, err)
-			_, err = runners[0].EnqueueJob(
+			_, err = workers[0].EnqueueJob(
 				"bad",
 				[]byte(""),
 				RetryWaits(retries),
 			)
 			assert.Nil(t, err)
-			_, err = runners[0].EnqueueJob(
+			_, err = workers[0].EnqueueJob(
 				"ugly",
 				[]byte(""),
 				RetryWaits([]time.Duration{0}),
@@ -253,8 +253,8 @@ func TestRunABunchOfTasks(t *testing.T) {
 
 		jobWG.Wait()
 
-		// tell all the runners to stop
-		for _, runner := range runners {
+		// tell all the workers to stop
+		for _, runner := range workers {
 			runner.StopChan <- true
 		}
 		runnerWG.Wait()
@@ -299,8 +299,8 @@ func TestRunnerBackoff(t *testing.T) {
 			return Backoff("this is an error")
 		}
 
-		// start up 10 runners.  persist job history
-		jr := NewJobRunner(
+		// start up 10 workers.  persist job history
+		worker := NewWorker(
 			db.DB,
 			OnStop(func() {
 				runnerWG.Done()
@@ -308,11 +308,11 @@ func TestRunnerBackoff(t *testing.T) {
 			PreserveCompletedJobs,
 			JobPollingInterval(0),
 		)
-		jr.RegisterQueue("bad", bad)
-		go jr.Run()
+		worker.RegisterQueue("bad", bad)
+		go worker.Run()
 
 		for n := 0; n < jobs; n++ {
-			_, err := jr.EnqueueJob(
+			_, err := worker.EnqueueJob(
 				"bad",
 				[]byte(""),
 				RetryWaits(Durations{}), // no retries
@@ -328,7 +328,7 @@ func TestRunnerBackoff(t *testing.T) {
 		jobWG.Wait()
 
 		// tell the runner to stop
-		jr.StopChan <- true
+		worker.StopChan <- true
 
 		runnerWG.Wait()
 
@@ -338,6 +338,6 @@ func TestRunnerBackoff(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, jobs, jobCount)
 
-		assert.Equal(t, expectedBackoff, jr.queues["bad"].backoff)
+		assert.Equal(t, expectedBackoff, worker.queues["bad"].backoff)
 	})
 }

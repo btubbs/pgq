@@ -50,12 +50,10 @@ func main() {
 
 func publishJobs(db *sql.DB) error {
 	jobRunner := pgq.NewJobRunner(db)
-	id, err := jobRunner.EnqueueJob("sayHello", []byte("Brent"))
+	_, err := jobRunner.EnqueueJob("sayHello", []byte("Brent"))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("enqueued job %d.  Going to do a couple more\n", id)
-
 	// Register a couple more.  don't ignore errors like this in real code.
 	jobRunner.EnqueueJob("sayHello", []byte("World"))
 	jobRunner.EnqueueJob("addOne", []byte("7"))
@@ -84,6 +82,5 @@ func run(db *sql.DB) error {
 		_, err = fmt.Printf("%s plus 1 is %d\n", string(data), num+1)
 		return err
 	})
-	fmt.Println("Listening for jobs")
 	return jobRunner.Run()
 }
