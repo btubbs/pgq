@@ -49,22 +49,22 @@ func main() {
 }
 
 func publishJobs(db *sql.DB) error {
-	jobRunner := pgq.NewJobRunner(db)
-	_, err := jobRunner.EnqueueJob("sayHello", []byte("Brent"))
+	worker := pgq.NewWorker(db)
+	_, err := worker.EnqueueJob("sayHello", []byte("Brent"))
 	if err != nil {
 		return err
 	}
 	// Register a couple more.  don't ignore errors like this in real code.
-	jobRunner.EnqueueJob("sayHello", []byte("World"))
-	jobRunner.EnqueueJob("addOne", []byte("7"))
+	worker.EnqueueJob("sayHello", []byte("World"))
+	worker.EnqueueJob("addOne", []byte("7"))
 	return nil
 }
 
 func run(db *sql.DB) error {
-	jobRunner := pgq.NewJobRunner(db)
+	worker := pgq.NewWorker(db)
 
 	// register handlers for all the job types we care about.
-	err := jobRunner.RegisterQueue("sayHello", func(data []byte) error {
+	err := worker.RegisterQueue("sayHello", func(data []byte) error {
 		_, err := fmt.Printf("Hello %s!\n", string(data))
 		return err
 	})
@@ -72,7 +72,7 @@ func run(db *sql.DB) error {
 		return err
 	}
 
-	jobRunner.RegisterQueue("addOne", func(data []byte) error {
+	worker.RegisterQueue("addOne", func(data []byte) error {
 		// turn our bytes into a number
 		num, err := strconv.Atoi(string(data))
 		if err != nil {
@@ -82,5 +82,5 @@ func run(db *sql.DB) error {
 		_, err = fmt.Printf("%s plus 1 is %d\n", string(data), num+1)
 		return err
 	})
-	return jobRunner.Run()
+	return worker.Run()
 }
