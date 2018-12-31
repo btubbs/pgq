@@ -63,23 +63,6 @@ func TestPerformNextJob(t *testing.T) {
 			},
 		},
 		{
-			desc: "handler not registered",
-			enqueueJobs: func(jr *JobRunner) {
-				jr.EnqueueJob("blah", []byte("some data"))
-				// maybe contrived, but the only way I can think to force the runner to query for this queue
-				// without registering a handler for it.
-				jr.queueNames = []string{"blah"}
-			},
-			handler: nil,
-			makeAssertions: func(t *testing.T, db *sqlx.DB, attempted bool, jobErr error) {
-				assert.False(t, attempted)
-				assert.Equal(t, "error performing job, cause: cannot run job, cause: no job handler registered for 'blah' queue", jobErr.Error())
-				var count int
-				assert.Nil(t, db.Get(&count, `SELECT count(*) from pgq_jobs;`))
-				assert.Equal(t, 1, count)
-			},
-		},
-		{
 			desc: "jobFunc panics",
 			enqueueJobs: func(jr *JobRunner) {
 				jr.EnqueueJob("blah", []byte("some data"))
@@ -212,7 +195,7 @@ func TestRunABunchOfTasks(t *testing.T) {
 		jobWG.Add(expectedJobs)
 
 		// we also say "done" when a runner exits
-		runnerCount := 1
+		runnerCount := 25
 		var runnerWG sync.WaitGroup
 		runnerWG.Add(runnerCount)
 
@@ -254,13 +237,13 @@ func TestRunABunchOfTasks(t *testing.T) {
 				RetryWaits(retries),
 			)
 			assert.Nil(t, err)
-			runners[0].EnqueueJob(
+			_, err = runners[0].EnqueueJob(
 				"bad",
 				[]byte(""),
 				RetryWaits(retries),
 			)
 			assert.Nil(t, err)
-			runners[0].EnqueueJob(
+			_, err = runners[0].EnqueueJob(
 				"ugly",
 				[]byte(""),
 				RetryWaits([]time.Duration{0}),
@@ -296,5 +279,65 @@ func TestRunABunchOfTasks(t *testing.T) {
 		err = db.QueryRow(`SELECT count(*) FROM pgq_jobs WHERE queue_name='ugly'`).Scan(&jobCount)
 		assert.Nil(t, err)
 		assert.Equal(t, jobMultiplier*(len(retries)+1), jobCount)
+	})
+}
+
+func TestRunnerBackoff(t *testing.T) {
+	withFreshDB(func(db *sqlx.DB) {
+
+		jobs := 3
+		expectedBackoff := time.Duration(0)
+		var jobWG sync.WaitGroup
+		jobWG.Add(jobs)
+
+		// we also say "done" when a runner exits
+		var runnerWG sync.WaitGroup
+		runnerWG.Add(1)
+
+		bad := func(data []byte) error {
+			jobWG.Done()
+			return Backoff("this is an error")
+		}
+
+		// start up 10 runners.  persist job history
+		jr := NewJobRunner(
+			db.DB,
+			OnStop(func() {
+				runnerWG.Done()
+			}),
+			PreserveCompletedJobs,
+			JobPollingInterval(0),
+		)
+		jr.RegisterQueue("bad", bad)
+		go jr.Run()
+
+		for n := 0; n < jobs; n++ {
+			_, err := jr.EnqueueJob(
+				"bad",
+				[]byte(""),
+				RetryWaits(Durations{}), // no retries
+			)
+			assert.Nil(t, err)
+			if expectedBackoff == 0 {
+				expectedBackoff = minBackoff
+			} else {
+				expectedBackoff *= 2
+			}
+		}
+
+		jobWG.Wait()
+
+		// tell the runner to stop
+		jr.StopChan <- true
+
+		runnerWG.Wait()
+
+		var jobCount int
+		// total attempts
+		err := db.QueryRow(`SELECT count(*) FROM pgq_jobs`).Scan(&jobCount)
+		assert.Nil(t, err)
+		assert.Equal(t, jobs, jobCount)
+
+		assert.Equal(t, expectedBackoff, jr.queues["bad"].backoff)
 	})
 }

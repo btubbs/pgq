@@ -21,8 +21,8 @@ func (ds Durations) Value() (driver.Value, error) {
 		stringVals = append(stringVals, d.String())
 	}
 
-	// putting these unquoted strings into this literal without quotes is safe because we know we got these
-	// from time.Duration.String(), which does not use commas or curly braces.
+	// putting these unquoted strings into this literal without quotes is safe because we know we got
+	// these from time.Duration.String(), which does not use commas or curly braces.
 	return "{" + strings.Join(stringVals, ",") + "}", nil
 }
 

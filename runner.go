@@ -12,23 +12,33 @@ import (
 	_ "github.com/lib/pq"
 )
 
+var (
+	minBackoff = time.Millisecond * 100
+	maxBackoff = time.Second * 64
+)
+
 // JobRunner provides methods for putting jobs on a Postgres-backed queue, and performing any jobs
 // that are there.
 type JobRunner struct {
 	db                  *sqlx.DB
-	handlers            map[string]func([]byte) error
-	queueNames          []string
+	queues              map[string]*queue
 	jobPollingInterval  time.Duration
 	deleteJobOnComplete bool
 	StopChan            chan bool
 	onStop              func()
 }
 
+type queue struct {
+	handler     func([]byte) error
+	pausedUntil time.Time
+	backoff     time.Duration
+}
+
 // NewJobRunner takes a Postgres DB connection and returns a JobRunner instance.
 func NewJobRunner(db *sql.DB, options ...RunnerOption) *JobRunner {
 	runner := &JobRunner{
 		db:                  sqlx.NewDb(db, "postgres"),
-		handlers:            map[string]func([]byte) error{},
+		queues:              map[string]*queue{},
 		jobPollingInterval:  time.Second * 10,
 		deleteJobOnComplete: true,
 		StopChan:            make(chan bool),
@@ -46,8 +56,8 @@ func (jr *JobRunner) EnqueueJob(queueName string, data []byte, options ...JobOpt
 
 // EnqueueJobInTx enqueues a Job, but lets you provide your own sql.Tx or other compatible object
 // with an Exec method.  This is useful if your application has other tables in the same database,
-// and you want to only enqueue the job if all the DB operations in the same transaction are successful.
-// All the handling of Begin, Commit, and Rollback calls is up to you.
+// and you want to only enqueue the job if all the DB operations in the same transaction are
+// successful.  All the handling of Begin, Commit, and Rollback calls is up to you.
 func (jr *JobRunner) EnqueueJobInTx(tx DB, queueName string, data []byte, options ...JobOption) (int, error) {
 	return enqueueJob(tx, queueName, data, options...)
 }
@@ -55,11 +65,10 @@ func (jr *JobRunner) EnqueueJobInTx(tx DB, queueName string, data []byte, option
 // RegisterQueue tells your JobRunner instance which function should be called for a
 // given job type.
 func (jr *JobRunner) RegisterQueue(queueName string, jobFunc func([]byte) error) error {
-	if _, alreadyRegistered := jr.handlers[queueName]; alreadyRegistered {
+	if _, alreadyRegistered := jr.queues[queueName]; alreadyRegistered {
 		return fmt.Errorf("a handler for %s jobs has already been registered", queueName)
 	}
-	jr.handlers[queueName] = jobFunc
-	jr.queueNames = append(jr.queueNames, queueName)
+	jr.queues[queueName] = &queue{handler: jobFunc}
 	return nil
 }
 
@@ -74,7 +83,6 @@ func (jr *JobRunner) Run() error {
 			return nil
 		default:
 			if foundJob, err := jr.PerformNextJob(); err != nil {
-				fmt.Println("err", err)
 				return errorx.Decorate(err, "exiting job runner")
 			} else if !foundJob {
 				// we didn't find a job.  Take a nap.
@@ -84,10 +92,23 @@ func (jr *JobRunner) Run() error {
 	}
 }
 
-// PerformNextJob performs the next job in the queue. It returns true if it attempted to run a job, or false
-// if there was no job in the queue or some error prevented it from attempting to run the job.  It only returns an
-// error if there's some problem talking to Postgres.  Errors inside jobs are not bubbled up.
+func (jr *JobRunner) getQueueNames() []string {
+	names := []string{}
+	now := time.Now()
+	for k, v := range jr.queues {
+		if v.pausedUntil.Before(now) {
+			names = append(names, k)
+		}
+	}
+	return names
+}
+
+// PerformNextJob performs the next job in the queue. It returns true if it attempted to run a job,
+// or false if there was no job in the queue or some error prevented it from attempting to run the
+// job.  It returns two errors: jobErr, which is the error raised from the jobFunc itself (if any),
+// and any error raised in the surrounding code.
 func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
+	var jobErr error // the error returned by the jobFunc
 	tx, err := jr.db.Beginx()
 	if err != nil {
 		return false, err
@@ -96,8 +117,13 @@ func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 		outErr = errorx.DecorateMany("error performing job", outErr, tx.Commit())
 	}()
 
-	//   get job
-	job, err := getNextJob(tx, jr.queueNames)
+	// get job
+	queueNames := jr.getQueueNames()
+	if len(queueNames) == 0 {
+		return false, nil
+	}
+
+	job, err := getNextJob(tx, queueNames)
 	if err != nil {
 		return false, err
 	}
@@ -108,7 +134,7 @@ func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 	}
 
 	// get handler func from internal map
-	jobFunc, ok := jr.handlers[job.QueueName]
+	queue, ok := jr.queues[job.QueueName]
 	if !ok {
 		return false, errorx.DecorateMany(
 			"cannot run job",
@@ -118,7 +144,6 @@ func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 	ranAt := time.Now()
 
 	// run the job func in its own closure with its own panic handler.
-	var jobErr error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -126,10 +151,11 @@ func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 				jobErr = errorx.DecorateMany("panic in job handler", jobErr, panicErr)
 			}
 		}()
-		jobErr = jobFunc(job.Data)
+		jobErr = queue.handler(job.Data)
 	}()
 
-	// either delete the job from the queue, or update it with output, depending on how we've been configured.
+	// either delete the job from the queue, or update it with output, depending on how we've been
+	// configured.
 	if jr.deleteJobOnComplete {
 		err = deleteJob(tx, job)
 		if err != nil {
@@ -143,41 +169,59 @@ func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
 		}
 	}
 
-	if jobErr != nil && len(job.RetryWaits) > 0 {
-		// we errored, but we have more attempts.  Enqueue the next one for the future, after waiting the first attempt
-		// duration.  Store the rest of the attempt Durations on the new Job.
-		_, err = enqueueJob(
-			tx,
-			job.QueueName,
-			job.Data,
-			After(time.Now().Add(job.RetryWaits[0])),
-			RetryWaits(job.RetryWaits[1:]),
-		)
-		if err != nil {
-			return true, errorx.Decorate(err, "error enqueueing retry")
+	if jobErr != nil {
+		// handle backoffs
+		if b, ok := jobErr.(Backoffer); ok && b.Backoff() {
+			// change multiplier if necessary
+			if queue.backoff == 0 {
+				queue.backoff = minBackoff
+			} else {
+				queue.backoff *= 2
+			}
+
+			if queue.backoff > maxBackoff {
+				queue.backoff = maxBackoff
+			}
+		}
+		// handle retries
+		if len(job.RetryWaits) > 0 {
+			// we errored, but we have more attempts.  Enqueue the next one for the future, after waiting
+			// the first attempt duration.  Store the rest of the attempt Durations on the new Job.
+			_, err = enqueueJob(
+				tx,
+				job.QueueName,
+				job.Data,
+				After(time.Now().Add(job.RetryWaits[0])),
+				RetryWaits(job.RetryWaits[1:]),
+			)
+			if err != nil {
+				return true, errorx.Decorate(err, "error enqueueing retry")
+			}
 		}
 	}
+	queue.pausedUntil = ranAt.Add(queue.backoff)
 	return true, nil
 }
 
 // A RunnerOption sets an optional parameter on the JobRunner.
 type RunnerOption func(*JobRunner)
 
-// JobPollingInterval sets the amount of time that the runner will sleep if it has no jobs to do.  Default is
-// 10 seconds.
+// JobPollingInterval sets the amount of time that the runner will sleep if it has no jobs to do.
+// Default is 10 seconds.
 func JobPollingInterval(d time.Duration) RunnerOption {
 	return func(jr *JobRunner) {
 		jr.jobPollingInterval = d
 	}
 }
 
-// PreserveCompletedJobs sets the runner option to leave job attempts in the pgq_jobs table instead of deleting them
-// when complete.
+// PreserveCompletedJobs sets the runner option to leave job attempts in the pgq_jobs table instead
+// of deleting them when complete.
 func PreserveCompletedJobs(jr *JobRunner) {
 	jr.deleteJobOnComplete = false
 }
 
-// OnStop sets an optional callback function that will be called when the runner exits its Run method.
+// OnStop sets an optional callback function that will be called when the runner exits its Run
+// method.
 func OnStop(f func()) RunnerOption {
 	return func(jr *JobRunner) {
 		jr.onStop = f

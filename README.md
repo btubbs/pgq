@@ -102,9 +102,9 @@ db, _ := sql.Open("postgres", "postgres://postgres@/my_database?sslmode=disable"
 runner := pgq.NewJobRunner(db)
 ```
 
-Once you have a runner, you can register your job handler functions with it using `RegisterQueue`
-and passing two arguments: the queue name (which can be any string you like), and your handler
-function.
+Now you can register your job handler functions with this runner by calling its `RegisterQueue`
+method and passing two arguments: the queue name (which can be any string you like), and your
+handler function.
 
 ```go
 err := runner.RegisterQueue("hello", SayHello)
@@ -122,16 +122,16 @@ err := runner.RegisterQueue("goodbye", worker.SayGoodbye)
 If you attempt to register the same queue name more than once on the same runner, you'll get an
 error.
 
-Once your handler functions have been registered, you start the job runner by calling its `Run`
+With your handler functions now registered, you start the job runner by calling its `Run`
 method.  This call will query for uncompleted jobs and call the appropriate handler function for each
-of them.  
+of them.
 
 ```go
 err := runner.Run()
 ```
 
-This will loop and perform jobs forever.  It will only stop it hits an unrecoverable error, or the
-program is terminated, or your program stops the loop by sending a value on the runner's stop
+This will loop and perform jobs forever.  It will only stop if it hits an unrecoverable error, or
+the program is terminated, or your program stops the loop by sending a value on the runner's stop
 channel, like this:
 
 ```go
