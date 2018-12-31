@@ -17,7 +17,6 @@ import (
 type JobRunner struct {
 	db                  *sqlx.DB
 	handlers            map[string]func([]byte) error
-	queueNames          []string
 	jobPollingInterval  time.Duration
 	deleteJobOnComplete bool
 	StopChan            chan bool
@@ -27,11 +26,11 @@ type JobRunner struct {
 // NewJobRunner takes a Postgres DB connection and returns a JobRunner instance.
 func NewJobRunner(db *sql.DB, options ...RunnerOption) *JobRunner {
 	runner := &JobRunner{
+		StopChan:            make(chan bool),
 		db:                  sqlx.NewDb(db, "postgres"),
 		handlers:            map[string]func([]byte) error{},
 		jobPollingInterval:  time.Second * 10,
 		deleteJobOnComplete: true,
-		StopChan:            make(chan bool),
 	}
 	for _, option := range options {
 		option(runner)
@@ -59,7 +58,6 @@ func (jr *JobRunner) RegisterQueue(queueName string, jobFunc func([]byte) error)
 		return fmt.Errorf("a handler for %s jobs has already been registered", queueName)
 	}
 	jr.handlers[queueName] = jobFunc
-	jr.queueNames = append(jr.queueNames, queueName)
 	return nil
 }
 
@@ -73,10 +71,10 @@ func (jr *JobRunner) Run() error {
 		case <-jr.StopChan:
 			return nil
 		default:
-			if foundJob, err := jr.PerformNextJob(); err != nil {
+			if attemptedJob, err := jr.PerformNextJob(); err != nil {
 				fmt.Println("err", err)
 				return errorx.Decorate(err, "exiting job runner")
-			} else if !foundJob {
+			} else if !attemptedJob {
 				// we didn't find a job.  Take a nap.
 				time.Sleep(jr.jobPollingInterval)
 			}
@@ -87,7 +85,7 @@ func (jr *JobRunner) Run() error {
 // PerformNextJob performs the next job in the queue. It returns true if it attempted to run a job, or false
 // if there was no job in the queue or some error prevented it from attempting to run the job.  It only returns an
 // error if there's some problem talking to Postgres.  Errors inside jobs are not bubbled up.
-func (jr *JobRunner) PerformNextJob() (found bool, outErr error) {
+func (jr *JobRunner) PerformNextJob() (attempted bool, outErr error) {
 	tx, err := jr.db.Beginx()
 	if err != nil {
 		return false, err
