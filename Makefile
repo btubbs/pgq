@@ -11,7 +11,7 @@ tests: dep
 	go test .
 
 coverage.txt: dep $(GOBIN)/go-acc
-	go test -coverprofile=$@
+	go-acc ./... --output=$@
 
 viewcoverage: coverage.txt 
 	go tool cover -html=$<
