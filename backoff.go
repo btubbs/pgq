@@ -23,7 +23,7 @@ func (b BackoffError) Backoff() bool {
 }
 
 // Backoff returns an error that implements the Backoffer interface, telling the caller
-// processeing the error to slow the queue down.
+// processing the error to slow the queue down.
 func Backoff(msg string) Backoffer {
 	return BackoffError{
 		message:       msg,

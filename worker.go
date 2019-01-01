@@ -1,3 +1,6 @@
+// Package pgq provides an implementation of a Postgres-backed job queue.  Safe concurrency is built
+// on top of the SKIP LOCKED functionality introduced in Postgres 9.5.  Retries and exponential
+// backoff are supported.
 package pgq
 
 import (
