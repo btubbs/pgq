@@ -279,7 +279,7 @@ type Backoffer interface {
 }
 ```
 
-If the error returned by your job implements that interface, and tts `Backoff()` method returns
+If the error returned by your job implements that interface, and its `Backoff()` method returns
 `true`, then the worker will pause for a short time (100 milliseconds) before pulling jobs off that
 queue again.  The next time a job returns a backoff, that time will be doubled, and so on until
 reaching the max backoff time (60 seconds).
