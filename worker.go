@@ -122,6 +122,11 @@ func (worker *Worker) Run() error {
 	}
 }
 
+// Count returns the number of pending jobs for the given queues
+func (worker *Worker) Count(queueNames ...string) (int64, error) {
+	return count(worker.db, queueNames)
+}
+
 func (worker *Worker) getQueueNames() []string {
 	names := []string{}
 	now := time.Now()

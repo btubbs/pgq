@@ -8,6 +8,7 @@ import (
 	"github.com/guregu/null"
 	"github.com/jmoiron/sqlx"
 	"github.com/joomcode/errorx"
+	"github.com/lib/pq"
 )
 
 func getNextJob(tx *sqlx.Tx, queueNames []string) (*Job, error) {
@@ -38,6 +39,19 @@ func getNextJob(tx *sqlx.Tx, queueNames []string) (*Job, error) {
 	default:
 		return nil, errorx.Decorate(err, "could not get next job")
 	}
+}
+
+func count(execer DB, queueNames []string) (int64, error) {
+	var count int64
+	if err := execer.QueryRow(`
+		SELECT count(*) FROM pgq_jobs
+		WHERE
+			queue_name = ANY($1)
+			AND run_after < $2
+			AND ran_at IS NULL;`, pq.Array(queueNames), time.Now()).Scan(&count); err != nil {
+		return -1, errorx.Decorate(err, "could not count jobs")
+	}
+	return count, nil
 }
 
 // DB is anything with the DB methods on it that we need. (like a DB or a Tx)
